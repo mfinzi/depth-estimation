@@ -4,6 +4,8 @@ import scipy.ndimage
 from sklearn.feature_extraction.image import extract_patches_2d
 from .utils import pad_image, crop_patch, compute_histogram, read_image
 from scipy.ndimage.filters import convolve as conv
+import cv2
+from cv2.ximgproc import guidedFilter
 
 def centroids(masks):
     imax, jmax = masks.shape[1:]
@@ -33,6 +35,14 @@ def laplacian_op(img_shape):
     lap_2d = np.array([[ 0,-1, 0],[-1, 4,-1],[ 0,-1, 0]])
     return convolve_op(lap_2d,img_shape)
 
+def guided_op(guide_img,radius,eps):
+    n = guide_img.shape[0]*guide_img.shape[1]
+    def mvm(v):
+        img = v.reshape(guide_img.shape)
+        out_img = guidedFilter(guide_img,np.uint8(img*255),radius,eps)
+        return out_img.reshape(-1)/255.
+    return sp.sparse.linalg.LinearOperator((n,n),mvm)
+
 def identity_op(img_shape):
     n = img_shape[0]*img_shape[1]
     return sp.sparse.linalg.LinearOperator((n,n),lambda v:v)
@@ -49,8 +59,8 @@ def normalized(img,window_shape=None):
         mfunc = lambda img: img.mean(axis=(0,1))
     else:
         box = np.ones(window_shape)/(window_shape[0]*window_shape[1])
-        print(box.shape)
-        print(img.shape)
+        if len(img.shape) == 3:
+            box = box[...,None]
         mfunc = lambda img: conv(img,box)
 
     diff = img-mfunc(img)
