@@ -1,6 +1,0 @@
-lattice.cpp
-setup.py
-lattice.egg-info/PKG-INFO
-lattice.egg-info/SOURCES.txt
-lattice.egg-info/dependency_links.txt
-lattice.egg-info/top_level.txt
