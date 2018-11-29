@@ -193,10 +193,32 @@ class PermutohedralLattice {
 
     // Splat into the lattice
     gettimeofday(t+1, NULL); printf("Splatting...\n");
-
-    for (int i=0; i<n; ++i){
-        lattice.splat(ref[i],src[i]);
+    float* arr_ref = new float[n*refChannels];
+    float* arr_src = new float[n*srcChannels];
+    auto ref_iter = ref.accessor<float,2>();
+    auto src_iter = src.accessor<float,2>();
+    /// I've been assuming that this works, test it?
+    /// if the arrays get garbage, this is bad
+    
+    printf("%.6f",ref_iter[0][0]);
+    printf("%.6f",src_iter[0][0]);
+    for (int64_t i=0; i<n; ++i){
+      for (int64_t c=0; c<refChannels;++c){
+        arr_ref[i+c*refChannels] = ref_iter[i][c];
+      }
     }
+    for (int64_t i=0; i<n; ++i){
+      for (int64_t c=0; c<srcChannels;++c){
+        arr_src[i+c*srcChannels] = src_iter[i][c];
+      }
+    }
+    printf("%.6f",arr_ref[0]);
+    printf("%.6f",arr_src[0]);
+    // End test block
+    for (int i=0; i<n; ++i){
+        lattice.splat(arr_ref + i*refChannels, arr_src + i*srcChannels);
+    }
+    
     // // Old code
     // float *col = new float[im.channels+1]; 
     // col[im.channels] = 1; // homogeneous coordinate
@@ -223,12 +245,29 @@ class PermutohedralLattice {
     gettimeofday(t+3, NULL); printf("Slicing...\n");
     lattice.beginSlice();
     float* outArray = new float[n*srcChannels];
+    for (int i=0;i<n*srcChannels;++i){
+      outArray[i]=0;
+    }
     for (int i=0; i<n; ++i){
         lattice.slice(outArray + i*srcChannels);
     }
-    delete [] outArray;
-    at::Tensor output;// = at::from_blob(outArray,{n,srcChannels});
-    //delete[] outArray;
+    delete [] arr_ref;
+    delete [] arr_src;
+    printf("%.6f",outArray[0]);
+    //printf("%.6f",outArray[1000]);
+    //at::Tensor output = at::from_blob(outArray,{n,srcChannels});
+    at::Tensor output = torch::CPU(at::kFloat).tensorFromBlob(outArray,{n,srcChannels});
+    at::TensorAccessor<float,2> fa = output.accessor<float,2>();
+    printf("%.6f",fa[0][0]);
+    // at::Tensor output = at::empty({n,srcChannels});
+    // auto out_iter = output.accessor<float,2>();
+    // for (int64_t i=0; i<n; ++i){
+    //   for (int64_t c=0; c<srcChannels;++c){
+    //     out_iter[i][c] = outArray[i+c*srcChannels];
+    //   }
+    // }
+    // delete [] outArray;
+    // delete[] outArray;
     // Need to figure out how to fill out with outArray
     
     // lattice.beginSlice();
@@ -249,24 +288,24 @@ class PermutohedralLattice {
     gettimeofday(t+4, NULL);
     const char *names[4] = {"Init  ", "Splat ", "Blur  ", "Slice "};	
     for (int i = 1; i < 5; i++)
-      printf("%s: %3.3f ms\n", names[i-1], (t[i].tv_sec - t[i-1].tv_sec) +
+      printf("%s: %3.3f s\n", names[i-1], (t[i].tv_sec - t[i-1].tv_sec) +
 	     (t[i].tv_usec - t[i-1].tv_usec)/1000000.0);
     
     return output;
   }
     
-  /* Constructor
-   *     d_ : dimensionality of key vectors
-   *    vd_ : dimensionality of value vectors
-   * nData_ : number of points in the input
-   */
- PermutohedralLattice(int d_, int vd_, int nData_) :
-  d(d_), vd(vd_), nData(nData_), hashTable(d_, vd_) {
+    /* Constructor
+      *     d_ : dimensionality of key vectors
+      *    vd_ : dimensionality of value vectors
+      * nData_ : number of points in the input
+      */
+  PermutohedralLattice(int d_, int vd_, int nData_) :
+    d(d_), vd(vd_), nData(nData_), hashTable(d_, vd_) {
 
     // Allocate storage for various arrays
     elevated = new float[d+1];
     scaleFactor = new float[d];
-	
+
     greedy = new short[d+1];
     rank = new char[d+1];	
     barycentric = new float[d+2];
@@ -274,15 +313,15 @@ class PermutohedralLattice {
     nReplay = 0;
     canonical = new short[(d+1)*(d+1)];
     key = new short[d+1];
-    
+
     // compute the coordinates of the canonical simplex, in which
     // the difference between a contained point and the zero
     // remainder vertex is always in ascending order. (See pg.4 of paper.)
     for (int i = 0; i <= d; i++) {
       for (int j = 0; j <= d-i; j++)
-	      canonical[i*(d+1)+j] = i; 
+        canonical[i*(d+1)+j] = i; 
       for (int j = d-i+1; j <= d; j++)
-	      canonical[i*(d+1)+j] = i - (d+1); 
+        canonical[i*(d+1)+j] = i - (d+1); 
     }
         
     // Compute parts of the rotation matrix E. (See pg.4-5 of paper.)      
@@ -291,33 +330,32 @@ class PermutohedralLattice {
       scaleFactor[i] = 1.0f/(sqrtf((float)(i+1)*(i+2)));
 
       /* We presume that the user would like to do a Gaussian blur of standard deviation
-       * 1 in each dimension (or a total variance of d, summed over dimensions.)
-       * Because the total variance of the blur performed by this algorithm is not d,
-       * we must scale the space to offset this.
-       *
-       * The total variance of the algorithm is (See pg.6 and 10 of paper):
-       *  [variance of splatting] + [variance of blurring] + [variance of splatting]
-       *   = d(d+1)(d+1)/12 + d(d+1)(d+1)/2 + d(d+1)(d+1)/12
-       *   = 2d(d+1)(d+1)/3.
-       *
-       * So we need to scale the space by (d+1)sqrt(2/3).
-       */
+        * 1 in each dimension (or a total variance of d, summed over dimensions.)
+        * Because the total variance of the blur performed by this algorithm is not d,
+        * we must scale the space to offset this.
+        *
+        * The total variance of the algorithm is (See pg.6 and 10 of paper):
+        *  [variance of splatting] + [variance of blurring] + [variance of splatting]
+        *   = d(d+1)(d+1)/12 + d(d+1)(d+1)/2 + d(d+1)(d+1)/12
+        *   = 2d(d+1)(d+1)/3.
+        *
+        * So we need to scale the space by (d+1)sqrt(2/3).
+        */
       scaleFactor[i] *= (d+1)*sqrtf(2.0/3);
     }
   }
 
 
   /* Performs splatting with given position and value vectors */
-  void splat(at::Tensor position2, at::Tensor value) {
+  void splat(float* position, float* value) {
     //const long unsigned int dd = d;
-    auto position = position2.accessor<float,1>();
+    //auto position = position2.accessor<float,1>();
     // first rotate position into the (d+1)-dimensional hyperplane
     elevated[d] = -d*position[d-1]*scaleFactor[d-1];
     for (int i = d-1; i > 0; i--)
-      elevated[i] = (elevated[i+1] - 
-		     i*position[i-1]*scaleFactor[i-1] + 
-		     (i+2)*position[i]*scaleFactor[i]);
-    elevated[0] = elevated[1] + 2*position[0]*scaleFactor[0];
+      elevated[i] = (elevated[i+1] - i*position[i-1]*scaleFactor[i-1] + 
+		                (i+2)*position[i]*scaleFactor[i]);
+      elevated[0] = elevated[1] + 2*position[0]*scaleFactor[0];
     
     // prepare to find the closest lattice points
     float scale = 1.0f/(d+1);	
@@ -343,28 +381,29 @@ class PermutohedralLattice {
     memset(myrank, 0, sizeof(char)*(d+1));
     for (int i = 0; i < d; i++)
       for (int j = i+1; j <= d; j++)
-	if (elevated[i] - mygreedy[i] < elevated[j] - mygreedy[j]) myrank[i]++; else myrank[j]++;
+	      if (elevated[i] - mygreedy[i] < elevated[j] - mygreedy[j]) myrank[i]++;
+        else myrank[j]++;
 
     if (sum > 0) { 
       // sum too large - the point is off the hyperplane.
       // need to bring down the ones with the smallest differential
       for (int i = 0; i <= d; i++) {
-	if (myrank[i] >= d + 1 - sum) {
-	  mygreedy[i] -= d+1;
-	  myrank[i] += sum - (d+1);
-	} else
-	  myrank[i] += sum;
+        if (myrank[i] >= d + 1 - sum) {
+          mygreedy[i] -= d+1;
+          myrank[i] += sum - (d+1);
+        } else
+        myrank[i] += sum;
       }
     } else if (sum < 0) {
-      // sum too small - the point is off the hyperplane
-      // need to bring up the ones with largest differential
-      for (int i = 0; i <= d; i++) {
-	if (myrank[i] < -sum) {
-	  mygreedy[i] += d+1;
-	  myrank[i] += (d+1) + sum;
-	} else
-	  myrank[i] += sum;
-      }
+        // sum too small - the point is off the hyperplane
+        // need to bring up the ones with largest differential
+        for (int i = 0; i <= d; i++) {
+          if (myrank[i] < -sum) {
+            mygreedy[i] += d+1;
+            myrank[i] += (d+1) + sum;
+          } else
+            myrank[i] += sum;
+        }
     }
    
     // Compute barycentric coordinates (See pg.10 of paper.)
@@ -381,21 +420,20 @@ class PermutohedralLattice {
       for (int i = 0; i < d; i++)
         key[i] = mygreedy[i] + canonical[remainder*(d+1) + myrank[i]];
   
-      // Retrieve pointer to the value at this vertex.
-      float * val = hashTable.lookup(key, true);
+        // Retrieve pointer to the value at this vertex.
+        float * val = hashTable.lookup(key, true);
 
-      // Accumulate values with barycentric weight.
-      auto value_a = value.accessor<float,1>();
-      for (int i = 0; i < vd; i++)
-	      val[i] += (barycentric[remainder]*value_a[i]);
+        // Accumulate values with barycentric weight.
+        //auto value_a = value.accessor<float,1>();
+        for (int i = 0; i < vd; i++)
+          val[i] += (barycentric[remainder]*value[i]);
 
-      // Record this interaction to use later when slicing
-      replay[nReplay].offset = val - hashTable.getValues();
-      replay[nReplay].weight = barycentric[remainder];
-      nReplay++;
-      
+        // Record this interaction to use later when slicing
+        replay[nReplay].offset = val - hashTable.getValues();
+        replay[nReplay].weight = barycentric[remainder];
+        nReplay++;
+      }
     }
-  }
 
   // Prepare for slicing
   void beginSlice() {
@@ -408,12 +446,12 @@ class PermutohedralLattice {
    */
     void slice(float* col) {
       float *base = hashTable.getValues();
-      for (int j = 0; j < vd; j++) col[j] = 0; // Zero the output channels for the current pixel (col)
+      for (int j = 0; j < vd; j++) col[j] = -100; // Zero the output channels for the current pixel (col)
 
       for (int i = 0; i <= d; i++) { // Loop over the input channels
         ReplayEntry r = replay[nReplay++]; // get the pointer offset and weight for this pixel
         for (int j = 0; j < vd; j++) { // Loop over the output channels
-          col[j] += r.weight*base[r.offset + j]; // add to channel j (of the pixel associated with col)
+          //col[j] += r.weight*base[r.offset + j]; // add to channel j (of the pixel associated with col)
         }                                         // the 
       }
     }
@@ -460,7 +498,9 @@ class PermutohedralLattice {
       // Mix values of the three vertices
       for (int k = 0; k < vd; k++)
         newVal[k] = (0.25f*vm1[k] + 0.5f*oldVal[k] + 0.25f*vp1[k]);
-	  }  
+	  }
+    
+      
 	  float *tmp = newValue;
 	  newValue = oldValue;
 	  oldValue = tmp;
