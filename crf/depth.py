@@ -2,10 +2,102 @@ import numpy as np
 import scipy as sp
 import scipy.ndimage
 from sklearn.feature_extraction.image import extract_patches_2d
-from .utils import crop_patch, compute_histogram, read_image
 from scipy.ndimage.filters import convolve as conv
 import cv2
 from cv2.ximgproc import guidedFilter
+
+
+def normalized(img,window_shape=None):
+    if window_shape is None: 
+        mfunc = lambda img: img.mean(axis=(0,1))
+    else:
+        box = np.ones(window_shape)/(window_shape[0]*window_shape[1])
+        if len(img.shape) == 3:
+            box = box[...,None]
+        mfunc = lambda img: conv(img,box)
+
+    diff = img-mfunc(img)
+    std = np.sqrt(mfunc(diff**2))
+    normalized_img = diff/(std+1e-6)
+    return normalized_img
+
+def SD(imga,imgb):
+    return (imga-imgb)**2
+def AD(imga,imgb):
+    return np.abs(imga-imgb)
+def nprod(imga,imgb):
+    return -1*imga*imgb
+
+def disparity_estimate(img1,img2,window_size=9,criterion=AD):
+    """Computes minimum energy disparity from window sweep algo"""
+    energy = disparity_badness(img1,img2,window_size,criterion)
+    return np.argmin(energy,axis=-1)
+
+def disparity_badness(img1,img2,window_size=9,criterion=AD):
+    """Computes the the energy for each disparity in 0,1,...,w//4
+        using the sweep over patches with criterion"""
+    ws = window_size
+    max_disp = img1.shape[1]//4
+    nimg1 = normalized(img1,(ws,ws))
+    nimg2 = normalized(img2,(ws,ws))
+
+    h,w,c = nimg1.shape
+    padded_im2 = np.pad(nimg2,((0,0),(max_disp,0),(0,0)), mode='constant')
+
+    out = np.zeros((h,w,max_disp))
+    for i in np.arange(max_disp):#1+np.arange(-w//2,w//2):
+        shifted_nimg2 = padded_im2[:,max_disp-i:w+max_disp-i]
+        out[:,:,i] = criterion(nimg1,shifted_nimg2).sum(2)
+    box = np.ones((ws,ws,1))
+    aggregated = sp.ndimage.filters.convolve(out,box)
+    return aggregated
+
+def NCC_disp(img,template):
+    nimg = img#normalized(img)
+    ntemplate = template#normalized(template)
+    ncorr = sp.signal.convolve(nimg,ntemplate,mode='valid')
+    reduced = np.linalg.norm(ncorr,axis=-1)
+    i,j = np.where(reduced==np.max(reduced))
+    i,j = i[0],j[0]
+    return np.minimum(j, img.shape[1]-j)
+
+
+def get_poc_offset(img1,img2):
+    I1 = sp.fftpack.fft2(img1,axes=(0,1))
+    I2 = sp.fftpack.fft2(img2,axes=(0,1))
+    normalized = I1.conj()*I2/(np.abs(I1.conj()*I2)+1e-4)
+    cross_corr = sp.fftpack.ifft2(normalized).real
+    centered = sp.fftpack.fftshift(cross_corr,axes=(0,1))
+    reduced = np.linalg.norm(centered,axis=2)
+    i,j = np.where(reduced==np.max(reduced))
+    i,j = i[0],j[0]
+    return np.minimum(j, img2.shape[1]-j)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### Random junk
+
+
 
 def centroids(masks):
     imax, jmax = masks.shape[1:]
@@ -54,63 +146,3 @@ def diag_op(img):
     return sp.sparse.linalg.LinearOperator((n,n),lambda v:img_vec*v)
 #def extract_patches(img1,patch_size):
 
-def normalized(img,window_shape=None):
-    if window_shape is None: 
-        mfunc = lambda img: img.mean(axis=(0,1))
-    else:
-        box = np.ones(window_shape)/(window_shape[0]*window_shape[1])
-        if len(img.shape) == 3:
-            box = box[...,None]
-        mfunc = lambda img: conv(img,box)
-
-    diff = img-mfunc(img)
-    std = np.sqrt(mfunc(diff**2))
-    normalized_img = diff/(std+1e-6)
-    return normalized_img
-
-def SD(imga,imgb):
-    return (imga-imgb)**2
-def AD(imga,imgb):
-    return np.abs(imga-imgb)
-def nprod(imga,imgb):
-    return -1*imga*imgb
-
-def disparity_measurements(img1,img2,window_size=9):
-    ws = window_size
-    max_disp = int(img1.shape[1]/4)
-    nimg1 = normalized(img1,ws)
-    nimg2 = normalized(img2,ws)
-
-    h,w,c = nimg1.shape
-    #padded_im1 = np.pad(nimg1,((0,0),(max_disp,0),(0,0)), mode='constant')
-    padded_im2 = np.pad(nimg2,((0,0),(max_disp,0),(0,0)), mode='constant')
-
-    out = np.zeros((h,w,max_disp))
-    for i in np.arange(max_disp):#1+np.arange(-w//2,w//2):
-        shifted_nimg2 = padded_im2[:,max_disp-i:w+max_disp-i]
-        out[:,:,i] = AD(nimg1,shifted_nimg2).sum(2)
-    box = np.ones((ws,ws,1))
-    aggregated = sp.ndimage.filters.convolve(out,box)
-    disps = np.argmin(aggregated,axis=-1)
-    return disps
-
-def NCC_disp(img,template):
-    nimg = img#normalized(img)
-    ntemplate = template#normalized(template)
-    ncorr = sp.signal.convolve(nimg,ntemplate,mode='valid')
-    reduced = np.linalg.norm(ncorr,axis=-1)
-    i,j = np.where(reduced==np.max(reduced))
-    i,j = i[0],j[0]
-    return np.minimum(j, img.shape[1]-j)
-
-
-def get_poc_offset(img1,img2):
-    I1 = sp.fftpack.fft2(img1,axes=(0,1))
-    I2 = sp.fftpack.fft2(img2,axes=(0,1))
-    normalized = I1.conj()*I2/(np.abs(I1.conj()*I2)+1e-4)
-    cross_corr = sp.fftpack.ifft2(normalized).real
-    centered = sp.fftpack.fftshift(cross_corr,axes=(0,1))
-    reduced = np.linalg.norm(centered,axis=2)
-    i,j = np.where(reduced==np.max(reduced))
-    i,j = i[0],j[0]
-    return np.minimum(j, img2.shape[1]-j)

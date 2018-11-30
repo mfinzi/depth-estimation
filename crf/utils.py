@@ -14,51 +14,6 @@ def grayscale(img):
     return rgb2gray(img)
 
 
-def crop_patch(img, xmin, ymin, xmax, ymax):
-    """
-    Args:
-        [img]   Shape:HxW   Grayscale image.
-        [xmin]  Int         Minimum index on x-axis (i.e., along the width)
-        [xmax]  Inta        Maximum index on x-axis (i.e., alone the width)
-        [ymin]  Int         Minimum index on y-axis (i.e., along the height)
-        [ymax]  Int         Minimum index on y-axis (i.e., along the height)
-    Rets:
-        Image of shape up to (ymax-ymin, xmax-xmin).
-        If the index range goes outside the image, the return patch will be cropped.
-    """
-    xmin = int(xmin)
-    ymin = int(ymin)
-    xmax = int(xmax)
-    ymax = int(ymax)
-    newimg = np.zeros((ymax-ymin, xmax-xmin))
-    lby = np.maximum(ymin, 0)
-    uby = np.minimum(ymax, img.shape[0])
-    lbx = np.maximum(xmin, 0)
-    ubx = np.minimum(xmax, img.shape[1])
-    newimg[lby-ymin:uby-ymin, lbx-xmin:ubx-xmin] = img[lby:uby, lbx:ubx]
-    return newimg
-
-
-def compute_histogram(histogram_shape, indices, vals):
-    """
-    Args:
-        [histogram_shape]   Shape of the return histograms.
-        [indices]           A tiple of array [x_1, x_2, ..., x_d], where
-                            [x_1, ..., x_d] are the indices to np.array of shape
-                            [histogram_shape].
-        [vals]              The weights to be added to the histogram.
-    Rets:
-        Numpy array of shape [histogram_shape].
-    Example:
-        >> compute_histogram((2,2), ([0,1,1,0], [0,1,0,1]), [0.1, 0.3, 0.3, 0.3])
-        >> array([[0.1, 0.3],
-                  [0.3, 0.3]])
-    """
-    histogram = np.zeros(histogram_shape)
-    assert len(indices)==len(histogram_shape), 'Shape of histogram must match number of indices: {:d},{:d}'.format(len(indices),len(histogram_shape))
-    np.add.at(histogram, indices, vals)
-    return histogram
-
 import sys, re
 from struct import unpack
 def read_pfm(file):
