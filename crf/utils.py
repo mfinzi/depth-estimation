@@ -13,37 +13,6 @@ def read_image(imgname):
 def grayscale(img):
     return rgb2gray(img)
 
-def pad_image(img, t=0, b=0, l=0, r=0, padding='fill'):
-    """
-    Args:
-        [img]       Shape HxW   Grayscale image.
-        [t]         Int         Top padding.
-        [b]         Int         Bottom padding.
-        [l]         Int         Left padding.
-        [r]         Int         Right padding.
-        [padding]   String      Type of padding. Either "fill" or "replicate".
-    Rets:
-        Grayscale image with size (H+t+b, W+l+r) with margins padded.
-    """
-    if (t==0) and (b==0) and (l==0) and (r==0):
-        return img
-    h = img.shape[0]
-    w = img.shape[1]
-    newimg = np.zeros((h+t+b,w+l+r), dtype=img.dtype)
-    newimg[t:h+t,l:w+l]=img
-    if padding=='replicate':
-        newimg[:t,l:w+l] = img[[0],:]
-        newimg[h+t:,l:w+l] = img[[-1],:]
-        newimg[t:h+t,:l] = img[:,[0]]
-        newimg[t:h+t,w+l:] = img[:,[-1]]
-        newimg[:t,:l] = img[0,0]
-        newimg[:t,w+l:] = img[0,-1]
-        newimg[h+t:,w+l:] = img[-1,-1]
-        newimg[h+t:,:l] = img[-1,0]
-
-    assert padding in ['fill', 'replicate'], "Only two options supported now"
-    return newimg
-
 
 def crop_patch(img, xmin, ymin, xmax, ymax):
     """
@@ -125,3 +94,21 @@ def read_pfm(file):
         fmt = fmt + str(samples) + "f"
         img = unpack(fmt, buffer)
     return np.flip(np.array(img).reshape((height, width)),axis=0)
+
+def read_pgm(file):
+    with open(file, 'rb') as f:
+        buffer = f.read()
+        try:
+            header, width, height, maxval = re.search(
+                b"(^P5\s(?:\s*#.*[\r\n])*"
+                b"(\d+)\s(?:\s*#.*[\r\n])*"
+                b"(\d+)\s(?:\s*#.*[\r\n])*"
+                b"(\d+)\s(?:\s*#.*[\r\n]\s)*)", buffer).groups()
+        except AttributeError:
+            raise ValueError("Not a raw PGM file: '%s'" % filename)
+        gt_depth= np.frombuffer(buffer,
+                            dtype='u1' if int(maxval) < 256 else byteorder+'u2',
+                            count=int(width)*int(height),
+                            offset=len(header)
+                            ).reshape((int(height), int(width)))
+    return gt_depth
