@@ -25,6 +25,7 @@ class Vgg16features(torch.nn.Module):
         batch_input_reshaped = normalized[None,...].transpose((0,3,1,2))
         device = next(self.features.parameters()).device
         img_batch = torch.from_numpy(batch_input_reshaped).float().to(device)
+        resized = nn.functional.interpolate(img_batch,size=(224,224),mode='bilinear')
         return img_batch
 
     def get_random_features(self,x,i=0,num_features=10):
