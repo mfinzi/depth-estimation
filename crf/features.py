@@ -28,6 +28,12 @@ class Vgg16features(torch.nn.Module):
         resized = nn.functional.interpolate(img_batch,size=(224,224),mode='bilinear')
         return img_batch
 
+    def get_all_features(self,x):
+        xpt = self.preprocess(x)
+        feature_list = self(xpt)
+        np_features = [feature.cpu().data.numpy()[0].transpose((1,2,0)) for feature in feature_list]
+        return np_features
+
     def get_random_features(self,x,i=0,num_features=10):
         """x is a numpy image with shape (h x w x 3), i selects from block 1,2,3,4"""
         xpt = self.preprocess(x)

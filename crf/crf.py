@@ -1,10 +1,26 @@
 import torch
 import torch.nn.functional as F
-
+import numpy as np
 
 def gaussian_weights(f):
     """[f] n x c flattened reference 'image' to filter by"""
-    return torch.exp(-((f[None,:,:] - f[:,None,:])**2).sum(-1)/2) - torch.eye(f.shape[0]).to(f.device)
+    I = torch.eye(f.shape[0]).to(f.device)
+    W = torch.exp(-((f[None,:,:] - f[:,None,:])**2).sum(-1)/2)-I
+    D = W@torch.ones(f.shape[0]).to(f.device)
+    D_invsqrt = torch.diag(1/torch.sqrt(D))
+    W_normalized = D_invsqrt@(W-I)@D_invsqrt
+    return W_normalized
+
+
+def lazy_W(f):
+    def W(i,j):
+        square_dist = ((f-f[i,j])**2).sum(-1).reshape(-1)
+        a = np.exp(-square_dist/2)
+        d = a@np.ones(a.shape[0])-1
+        a /= np.sqrt(d)
+        weights = a.reshape(f.shape[:2])
+        return weights
+    return W
 
 def charbonneir(a,b,gamma=.1):
     return torch.sqrt(gamma**2 + (a-b)**2) - gamma
