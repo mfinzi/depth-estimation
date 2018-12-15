@@ -200,8 +200,8 @@ class PermutohedralLattice {
     /// I've been assuming that this works, test it?
     /// if the arrays get garbage, this is bad
     
-    printf("%.6f",ref_iter[0][0]);
-    printf("%.6f",src_iter[0][0]);
+    printf("%.6f\n",ref_iter[n-1][0]);
+    printf("%.6f\n",src_iter[n-1][0]);
     for (int64_t i=0; i<n; ++i){
       for (int64_t c=0; c<refChannels;++c){
         arr_ref[i+c*refChannels] = ref_iter[i][c];
@@ -212,8 +212,8 @@ class PermutohedralLattice {
         arr_src[i+c*srcChannels] = src_iter[i][c];
       }
     }
-    printf("%.6f",arr_ref[0]);
-    printf("%.6f",arr_src[0]);
+    printf("%.6f \n",arr_ref[(n-1)*refChannels]);
+    printf("%.6f \n",arr_src[(n-1)*srcChannels]);
     // End test block
     for (int i=0; i<n; ++i){
         lattice.splat(arr_ref + i*refChannels, arr_src + i*srcChannels);
@@ -239,7 +239,7 @@ class PermutohedralLattice {
     
     // Blur the lattice
     gettimeofday(t+2, NULL); printf("Blurring...");    
-    lattice.blur();
+    //lattice.blur();
     
     // Slice from the lattice
     gettimeofday(t+3, NULL); printf("Slicing...\n");
@@ -249,11 +249,17 @@ class PermutohedralLattice {
       outArray[i]=0;
     }
     for (int i=0; i<n; ++i){
-        lattice.slice(outArray + i*srcChannels);
+        float* col = outArray + i*srcChannels;
+        lattice.slice(col);
+        float scale = 1.0f/col[srcChannels-1]; // Last channel stores sum
+        // for (int c=0; c<srcChannels; ++c){
+        //   col[c] = col[c]*scale;
+        // }
     }
     delete [] arr_ref;
     delete [] arr_src;
     printf("%.6f",outArray[0]);
+    printf("\n");
     //printf("%.6f",outArray[1000]);
     //at::Tensor output = at::from_blob(outArray,{n,srcChannels});
     at::Tensor output = torch::CPU(at::kFloat).tensorFromBlob(outArray,{n,srcChannels});
@@ -446,12 +452,12 @@ class PermutohedralLattice {
    */
     void slice(float* col) {
       float *base = hashTable.getValues();
-      for (int j = 0; j < vd; j++) col[j] = -100; // Zero the output channels for the current pixel (col)
+      for (int j = 0; j < vd; j++) col[j] = 0; // Zero the output channels for the current pixel (col)
 
-      for (int i = 0; i <= d; i++) { // Loop over the input channels
+      for (int i = 0; i <= d; i++) { // Loop over the input channels (d+1 simplex neighbors)
         ReplayEntry r = replay[nReplay++]; // get the pointer offset and weight for this pixel
         for (int j = 0; j < vd; j++) { // Loop over the output channels
-          //col[j] += r.weight*base[r.offset + j]; // add to channel j (of the pixel associated with col)
+          col[j] += r.weight*base[r.offset + j]; // add to channel j (of the pixel associated with col)
         }                                         // the 
       }
     }
