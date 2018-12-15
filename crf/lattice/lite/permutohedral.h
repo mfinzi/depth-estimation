@@ -200,20 +200,22 @@ class PermutohedralLattice {
     /// I've been assuming that this works, test it?
     /// if the arrays get garbage, this is bad
     
-    printf("%.6f\n",ref_iter[n-1][0]);
-    printf("%.6f\n",src_iter[n-1][0]);
+    // printf("%.3f\n",ref_iter[n-1][0]);
+    // printf("%.3f\n",src_iter[n-1][0]);
     for (int64_t i=0; i<n; ++i){
       for (int64_t c=0; c<refChannels;++c){
-        arr_ref[i+c*refChannels] = ref_iter[i][c];
+        arr_ref[i*refChannels+c] = ref_iter[i][c];
+        if (i==(n-1) && c==0) printf("%.3f\n",ref_iter[i][c]);
       }
     }
     for (int64_t i=0; i<n; ++i){
       for (int64_t c=0; c<srcChannels;++c){
-        arr_src[i+c*srcChannels] = src_iter[i][c];
+        arr_src[i*srcChannels+c] = src_iter[i][c];
+        if (i==(n-1) && c==0) printf("%.3f\n",src_iter[i][c]);
       }
     }
-    printf("%.6f \n",arr_ref[(n-1)*refChannels]);
-    printf("%.6f \n",arr_src[(n-1)*srcChannels]);
+    // printf("%.3f \n",arr_ref[(n-1)*refChannels]);
+    // printf("%.3f \n",arr_src[(n-1)*srcChannels]);
     // End test block
     for (int i=0; i<n; ++i){
         lattice.splat(arr_ref + i*refChannels, arr_src + i*srcChannels);
@@ -239,7 +241,7 @@ class PermutohedralLattice {
     
     // Blur the lattice
     gettimeofday(t+2, NULL); printf("Blurring...");    
-    //lattice.blur();
+    lattice.blur();
     
     // Slice from the lattice
     gettimeofday(t+3, NULL); printf("Slicing...\n");
@@ -251,20 +253,20 @@ class PermutohedralLattice {
     for (int i=0; i<n; ++i){
         float* col = outArray + i*srcChannels;
         lattice.slice(col);
-        float scale = 1.0f/col[srcChannels-1]; // Last channel stores sum
+        // float scale = 1.0f/col[srcChannels-1]; // Last channel stores sum
         // for (int c=0; c<srcChannels; ++c){
         //   col[c] = col[c]*scale;
         // }
     }
     delete [] arr_ref;
     delete [] arr_src;
-    printf("%.6f",outArray[0]);
-    printf("\n");
+    // printf("%.6f",outArray[0]);
+    // printf("\n");
     //printf("%.6f",outArray[1000]);
     //at::Tensor output = at::from_blob(outArray,{n,srcChannels});
     at::Tensor output = torch::CPU(at::kFloat).tensorFromBlob(outArray,{n,srcChannels});
     at::TensorAccessor<float,2> fa = output.accessor<float,2>();
-    printf("%.6f",fa[0][0]);
+    //printf("%.6f",fa[0][0]);
     // at::Tensor output = at::empty({n,srcChannels});
     // auto out_iter = output.accessor<float,2>();
     // for (int64_t i=0; i<n; ++i){
