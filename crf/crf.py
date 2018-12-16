@@ -38,6 +38,7 @@ def mean_field_infer(E_0,W,Mu,niters=10):
             [Q]     n x L:   output label probabilities"""
     Q = F.softmax(-E_0, dim=1)
     for i in range(niters):
+        print(i)
         E = E_0 + W@Q@Mu
         Q = F.softmax(-E, dim=1)
     return Q

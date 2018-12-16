@@ -2,7 +2,7 @@ import torch
 import numpy as np
 import torchvision.models as models
 import torch.nn as nn
-
+from scipy.ndimage import zoom
 class Vgg16features(torch.nn.Module):
     def __init__(self):
         super().__init__()
@@ -26,21 +26,28 @@ class Vgg16features(torch.nn.Module):
         device = next(self.features.parameters()).device
         img_batch = torch.from_numpy(batch_input_reshaped).float().to(device)
         resized = nn.functional.interpolate(img_batch,size=(224,224),mode='bilinear')
-        return img_batch
+        return resized
+
+    def rescale_reshape(self,img_torch,img_shape):
+        h,w,_ = img_shape
+        img_np = img_torch.cpu().data.numpy()[0].transpose((1,2,0))
+        hn,wn,_ = img_np.shape
+        zoom_factor = h/hn,w/wn,1
+        return zoom(img_np,zoom_factor)
 
     def get_all_features(self,x):
         xpt = self.preprocess(x)
         feature_list = self(xpt)
-        np_features = [feature.cpu().data.numpy()[0].transpose((1,2,0)) for feature in feature_list]
+        np_features = [self.rescale_reshape(feature,x.shape) for feature in feature_list]
         return np_features
 
     def get_random_features(self,x,i=0,num_features=10):
         """x is a numpy image with shape (h x w x 3), i selects from block 1,2,3,4"""
-        xpt = self.preprocess(x)
-        feature_list = self(xpt)
-        np_features = feature_list[i].cpu().data.numpy()[0].transpose((1,2,0))
+        np_features = self.get_all_features(x)[i]
         projection_matrix = np.random.rand(np_features.shape[-1],num_features)
-        return np_features@projection_matrix
+        projected = np_features@projection_matrix
+        normalized = (projected - projected.mean((0,1)))/projected.std((0,1))
+        return normalized
 
 
 

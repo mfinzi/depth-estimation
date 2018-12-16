@@ -68,13 +68,10 @@ def filter_main(src, ref, A, b, r, k, L):
     print(miss / n)
     return new_src
 
-def filter(src, ref):
+def filter(src, ref, r, k, L):
     src = np.array(src)
     ref = np.array(ref)
     n, d = ref.shape
-    r = 5
-    k = 5
-    L = 30
     A, b = make_gaussian_family(d, r, k, L)
     return filter_main(src, ref, A, b, r, k, L)
 
