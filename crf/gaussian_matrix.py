@@ -35,7 +35,7 @@ class LSHGaussian(nn.Module):
         return self(U)
 
     def forward(self,U):
-        return lsh.filter(U,self.ref,5,5,30) - U
+        return crf.lsh.filter(U,self.ref,5,5,30) - U
 
     def backward(self,*args,**kwargs):
         raise NotImplementedError
