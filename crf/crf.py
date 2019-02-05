@@ -5,7 +5,7 @@ import numpy as np
 def gaussian_weights(f):
     """[f] n x c flattened reference 'image' to filter by"""
     I = torch.eye(f.shape[0]).to(f.device)
-    W = torch.exp(-((f[None,:,:] - f[:,None,:])**2).sum(-1)/2)-I
+    W = torch.exp(-((f[None,:,:] - f[:,None,:])**2).sum(-1))-I
     D = W@torch.ones(f.shape[0]).to(f.device)
     D_invsqrt = torch.diag(1/torch.sqrt(D))
     W_normalized = D_invsqrt@(W-I)@D_invsqrt
@@ -13,7 +13,7 @@ def gaussian_weights(f):
 
 def gaussian_weights_u(f):
     I = torch.eye(f.shape[0]).to(f.device)
-    W = torch.exp(-((f[None,:,:] - f[:,None,:])**2).sum(-1)/2)-I
+    W = torch.exp(-((f[None,:,:] - f[:,None,:])**2).sum(-1))-I
     return W
 
 def lazy_W(f):

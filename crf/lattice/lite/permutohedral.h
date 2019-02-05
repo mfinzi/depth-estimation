@@ -382,7 +382,7 @@ class PermutohedralLattice {
 
       sum += mygreedy[i];
     }
-    sum /= d+1;
+    sum *=scale;//Modification here /= d+1;
     
     // rank differential to find the permutation between this simplex and the canonical one.
     // (See pg. 3-4 in paper.)
@@ -434,7 +434,7 @@ class PermutohedralLattice {
         // Accumulate values with barycentric weight.
         //auto value_a = value.accessor<float,1>();
         for (int i = 0; i < vd; i++)
-          val[i] += (barycentric[remainder]*value[i]);
+          val[i] += (barycentric[remainder]*value[i]); // This should be an averaging operation rather than sum perhaps?
 
         // Record this interaction to use later when slicing
         replay[nReplay].offset = val - hashTable.getValues();
@@ -459,8 +459,8 @@ class PermutohedralLattice {
       for (int i = 0; i <= d; i++) { // Loop over the input channels (d+1 simplex neighbors)
         ReplayEntry r = replay[nReplay++]; // get the pointer offset and weight for this pixel
         for (int j = 0; j < vd; j++) { // Loop over the output channels
-          col[j] += r.weight*base[r.offset + j]; // add to channel j (of the pixel associated with col)
-        }                                         // the 
+          col[j] += r.weight*base[r.offset + j];///(1+powf(2,-d)); // add to channel j (of the pixel associated with col)
+        }                                         // magic scaling constant from krahenbuhls implementation?
       }
     }
 
@@ -505,8 +505,8 @@ class PermutohedralLattice {
       
       // Mix values of the three vertices
       for (int k = 0; k < vd; k++)
-        newVal[k] = (0.25f*vm1[k] + 0.5f*oldVal[k] + 0.25f*vp1[k]);
-	  }
+        newVal[k] = 2*(0.25f*vm1[k] + 0.5f*oldVal[k] + 0.25f*vp1[k]); // factor of two from krahenbuhl's implementation
+	  }                                                                 // because the gaussians should not be normalized
     
       
 	  float *tmp = newValue;
