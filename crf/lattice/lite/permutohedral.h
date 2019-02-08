@@ -15,7 +15,7 @@
 #endif
 
 using namespace std;
-
+typedef float float_type;
 /***************************************************************/
 /* Hash table implementation for permutohedral lattice
  * 

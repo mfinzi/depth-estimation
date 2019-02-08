@@ -51,7 +51,7 @@ class LatticeFilter(Function):
             filtered_all = latticefilter(all_,ref)
             [wg,wgf,ws,wsf] = torch.split(filtered_all,[L,L*d,L,L*d],dim=-1)
             # has shape n x d # Should be -2 here, there is a bug still
-            grad_reference = -1*(sf*wg[...,None] - src[...,None]*wgf.view(-1,L,d) + gf*ws[...,None] - g[...,None]*wsf.view(-1,L,d)).sum(-2) # sum over L dimension
+            grad_reference = -2*(sf*wg[...,None] - src[...,None]*wgf.view(-1,L,d) + gf*ws[...,None] - g[...,None]*wsf.view(-1,L,d)).sum(-2) # sum over L dimension
             if ctx.needs_input_grad[0]: grad_source = wg
         return grad_source, grad_reference
         
