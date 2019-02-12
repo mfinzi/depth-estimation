@@ -20,7 +20,7 @@ class LatticeGaussian(nn.Module):
     #     return self(U)
 
     def forward(self,U):
-        return latticefilter(U,self.ref) - U
+        return LatticeFilter.apply(U,self.ref) - U
 
 class LatticeFilter(Function):
     @staticmethod
