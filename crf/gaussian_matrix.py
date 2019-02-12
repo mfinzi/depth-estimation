@@ -42,8 +42,7 @@ class LatticeFilter(Function):
         d = ref.shape[-1]
         grad_source = grad_reference = None
         if ctx.needs_input_grad[0] and not ctx.needs_input_grad[1]:
-            print("only unary grad")
-            grad_source = ctx.W@g#latticefilter(g,ref) # Matrix is symmetric
+            grad_source = latticefilter(g,ref)#ctx.W@g#latticefilter(g,ref) # Matrix is symmetric
         if ctx.needs_input_grad[1]:
             gf = grad_and_ref = grad_output[...,None]*ref[...,None,:] # n x L x d
             grad_and_ref_flat = grad_and_ref.view(grad_and_ref.shape[:-2]+(L*d,))
