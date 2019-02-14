@@ -22,6 +22,24 @@ class LatticeGaussian(nn.Module):
     def forward(self,U):
         return LatticeFilter.apply(U,self.ref) - U
 
+class RbfLaplacian(nn.Module):
+    def __init__(self,ref,normalize=True):
+        """If normalize is true, will apply symmetric normalization
+            returns D - W or I - D^-1/2 W D^-1/2 if normalize is true"""
+        super().__init__()
+        self.ref = ref
+        self.shape = self.ref.shape[:1]*2
+        self.normalize = normalize
+        #if self.normalize:
+        self.D = LatticeFilter.apply(torch.ones(self.shape[:1]+(1,)),self.ref)
+    def __matmul__(self,U):
+        if self.normalize:
+            return -1*(U - LatticeFilter.apply(U/self.D.sqrt(),self.ref)/self.D.sqrt())
+        else:
+            return -1*(self.D*U - LatticeFilter.apply(U,self.ref))
+    
+
+
 class LatticeFilter(Function):
     @staticmethod
     def forward(ctx, source, reference):
@@ -36,25 +54,26 @@ class LatticeFilter(Function):
     def backward(ctx,grad_output):
         # Typical runtime of O(nd^2 + 2L*n*d), Worst case  O(nd^2 + 2L*n*d^2)
         # Does not support second order autograd at the moment
-        src, ref = ctx.saved_tensors
-        g = grad_output
-        n,L = src.shape[-2:]
-        d = ref.shape[-1]
-        grad_source = grad_reference = None
-        if ctx.needs_input_grad[0] and not ctx.needs_input_grad[1]:
-            grad_source = latticefilter(g,ref)#ctx.W@g#latticefilter(g,ref) # Matrix is symmetric
-        if ctx.needs_input_grad[1]:
-            gf = grad_and_ref = grad_output[...,None]*ref[...,None,:] # n x L x d
-            grad_and_ref_flat = grad_and_ref.view(grad_and_ref.shape[:-2]+(L*d,))
-            sf = src_and_ref = src[...,None]*ref[...,None,:] # n x L x d
-            src_and_ref_flat = src_and_ref.view(src_and_ref.shape[:-2]+(L*d,))
-            #n x (L+Ld+L+Ld):   n x L       n x Ld     n x L   n x Ld 
-            all_ = torch.cat([g,grad_and_ref_flat,src,src_and_ref_flat],dim=-1)
-            filtered_all = latticefilter(all_,ref)#ctx.W@all_#
-            [wg,wgf,ws,wsf] = torch.split(filtered_all,[L,L*d,L,L*d],dim=-1)
-            # has shape n x d # Should be -2 here, there is a bug still
-            grad_reference = -2*(sf*wg[...,None] - src[...,None]*wgf.view(-1,L,d) + gf*ws[...,None] - g[...,None]*wsf.view(-1,L,d)).sum(-2) # sum over L dimension
-            if ctx.needs_input_grad[0]: grad_source = wg
+        with torch.no_grad():
+            src, ref = ctx.saved_tensors
+            g = grad_output
+            n,L = src.shape[-2:]
+            d = ref.shape[-1]
+            grad_source = grad_reference = None
+            if ctx.needs_input_grad[0] and not ctx.needs_input_grad[1]:
+                grad_source = latticefilter(g,ref)#ctx.W@g#latticefilter(g,ref) # Matrix is symmetric
+            if ctx.needs_input_grad[1]: # try torch.no_grad ()
+                gf = grad_and_ref = grad_output[...,None]*ref[...,None,:] # n x L x d
+                grad_and_ref_flat = grad_and_ref.view(grad_and_ref.shape[:-2]+(L*d,))
+                sf = src_and_ref = src[...,None]*ref[...,None,:] # n x L x d
+                src_and_ref_flat = src_and_ref.view(src_and_ref.shape[:-2]+(L*d,))
+                #n x (L+Ld+L+Ld):   n x L       n x Ld     n x L   n x Ld 
+                all_ = torch.cat([g,grad_and_ref_flat,src,src_and_ref_flat],dim=-1)
+                filtered_all = latticefilter(all_,ref)#ctx.W@all_#
+                [wg,wgf,ws,wsf] = torch.split(filtered_all,[L,L*d,L,L*d],dim=-1)
+                # has shape n x d 
+                grad_reference = -2*(sf*wg[...,None] - src[...,None]*wgf.view(-1,L,d) + gf*ws[...,None] - g[...,None]*wsf.view(-1,L,d)).sum(-2) # sum over L dimension
+                if ctx.needs_input_grad[0]: grad_source = wg
         return grad_source, grad_reference
         
 

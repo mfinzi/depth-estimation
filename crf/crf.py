@@ -8,7 +8,7 @@ def gaussian_weights(f):
     W = torch.exp(-((f[None,:,:] - f[:,None,:])**2).sum(-1))-I
     D = W@torch.ones(f.shape[0]).to(f.device)
     D_invsqrt = torch.diag(1/torch.sqrt(D))
-    W_normalized = D_invsqrt@(W-I)@D_invsqrt
+    W_normalized = D_invsqrt@W@D_invsqrt - I
     return W_normalized
 
 def gaussian_weights_u(f):
@@ -19,8 +19,8 @@ def gaussian_weights_u(f):
 def lazy_W(f):
     def W(i,j):
         square_dist = ((f-f[i,j])**2).sum(-1).reshape(-1)
-        a = np.exp(-square_dist/2)
-        d = a@np.ones(a.shape[0])-1
+        a = np.exp(-square_dist)
+        d = a@np.ones(a.shape[0])-1 # for self include
         a /= np.sqrt(d)
         weights = a.reshape(f.shape[:2])
         return weights
@@ -48,7 +48,10 @@ def mean_field_infer(E_0,W,Mu,niters=10):
 
 
 import gc
-
+import inspect
+def get_var_name(var):
+    callers_local_vars = inspect.currentframe().f_back.f_locals.items()
+    return [k for k, v in callers_local_vars if v is var][0]
 ## MEM utils ##
 def mem_report():
     '''Report the memory usage of the tensor.storage in pytorch
@@ -88,6 +91,7 @@ def mem_report():
                 element_type,
                 size,
                 mem) )
+            #print("Name: {}".format(get_var_name(tensor)))
         print('-'*LEN)
         print('Total Tensors: %d \tUsed Memory Space: %.2f MBytes' % (total_numel, total_mem) )
         print('-'*LEN)
