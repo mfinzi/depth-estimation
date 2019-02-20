@@ -169,7 +169,7 @@ class HashTablePermutohedral {
 
 void arr_deleter(void* obj){
   printf("Array object deleted :)");
-  delete [] obj;
+  //delete [] obj;
 }
 
 /***************************************************************/
