@@ -1,5 +1,5 @@
-//#ifndef PERMUTOHEDRAL_LATTICE_H
-//#define PERMUTOHEDRAL_LATTICE_H
+#ifndef PERMUTOHEDRAL_LATTICE_H
+#define PERMUTOHEDRAL_LATTICE_H
 #include <torch/torch.h>
 #include <math.h>
 #include <stdlib.h>
@@ -88,7 +88,11 @@ class HashTablePermutohedral {
       if (h == capacity) h = 0;
     }
   }
-
+  ~HashTablePermutohedral(){
+    delete [] entries;
+    delete [] keys;
+    delete [] values;
+  }
   /* Looks up the value vector associated with a given key vector.
    *        k : pointer to the key vector to be looked up.
    *   create : true if a non-existing key should be created.
@@ -109,6 +113,8 @@ class HashTablePermutohedral {
     }
     return k;
   }
+
+  
 
  private:
   /* Grows the size of the hash table */
@@ -160,6 +166,11 @@ class HashTablePermutohedral {
   size_t capacity, filled;
   int kd, vd;  
 };
+
+void arr_deleter(void* obj){
+  printf("Array object deleted :)");
+  delete [] obj;
+}
 
 /***************************************************************/
 /* The algorithm class that performs the filter
@@ -266,7 +277,8 @@ class PermutohedralLattice {
     //printf("%.6f",outArray[1000]);
     //at::Tensor output = at::from_blob(outArray,{n,srcChannels});
     // at::kfloat_type
-    at::Tensor output = torch::CPU(at_float_type).tensorFromBlob(outArray,{n,srcChannels}).to(at_float_type);
+
+    at::Tensor output = torch::CPU(at_float_type).tensorFromBlob(outArray,{n,srcChannels},arr_deleter).to(at_float_type);
     at::TensorAccessor<float_type,2> fa = output.accessor<float_type,2>();
     //printf("%.6f",fa[0][0]);
     // at::Tensor output = at::empty({n,srcChannels});
@@ -276,7 +288,7 @@ class PermutohedralLattice {
     //     out_iter[i][c] = outArray[i+c*srcChannels];
     //   }
     // }
-    // delete [] outArray;
+    //delete [] outArray;
     // delete[] outArray;
     // Need to figure out how to fill out with outArray
     
@@ -461,7 +473,7 @@ class PermutohedralLattice {
       for (int i = 0; i <= d; i++) { // Loop over the input channels (d+1 simplex neighbors)
         ReplayEntry r = replay[nReplay++]; // get the pointer offset and weight for this pixel
         for (int j = 0; j < vd; j++) { // Loop over the output channels
-          col[j] += r.weight*base[r.offset + j];///(1+powf(2,-d)); // add to channel j (of the pixel associated with col)
+          col[j] += r.weight*base[r.offset + j]/(1+powf(2,-d));//; // add to channel j (of the pixel associated with col)
         }                                         // magic scaling constant from krahenbuhls implementation?
       }
     }
@@ -549,6 +561,15 @@ class PermutohedralLattice {
     char  *rank;
     short *greedy;
     HashTablePermutohedral hashTable;
+    ~PermutohedralLattice(){
+      delete [] replay;
+      delete [] canonical;
+      delete [] elevated;
+      delete [] scaleFactor;
+      delete [] greedy;
+      delete [] rank;
+      delete [] barycentric;
+      delete [] key;
+    };
 };
-
-//#endif
+#endif
