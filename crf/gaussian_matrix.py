@@ -7,7 +7,7 @@ from torch.autograd import Function
 from guided_filter_pytorch.guided_filter import GuidedFilter, BoxFilter
 import time
 import numpy as np
-from concurrent.futures
+import concurrent.futures
 
 lattice = load(name="lattice",sources=[os.path.expanduser("~/depth-estimation/crf/lattice/lite/lattice.cpp")])
 latticefilter = lattice.filter

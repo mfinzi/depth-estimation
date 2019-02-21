@@ -1,7 +1,8 @@
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from gaussian_matrix import BatchedGaussian
+from .gaussian_matrix import BatchedAdjacency
 
 
 def gaussian_weights(f):
