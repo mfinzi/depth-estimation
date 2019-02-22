@@ -51,16 +51,18 @@ def mean_field_infer(E_0,W,Mu,niters=10):
 
 def potts_init(linear_layer):
     tensor = linear_layer.weight
-    L,LL = tensor.shape
+    L,LL,a,b = tensor.shape
     assert L == LL #(square matrix)
+    assert a==b==1
     with torch.no_grad():
         tensor.fill_(1)
-        tensor.sub_(torch.eye(L))
+        tensor.sub_(torch.eye(L)[...,None,None])
     
 class CRFasRNN(nn.Module):
     def __init__(self,num_classes,niters=5,num_threads=8):
         super().__init__()
-        self.Mu = nn.Linear(L,L,bias=False) # The compatibility matrix
+        #self.Mu = nn.Linear(num_classes,num_classes,bias=False) # The compatibility matrix
+        self.Mu = nn.Conv2d(num_classes,num_classes,kernel_size=1,bias=False)
         potts_init(self.Mu)
         self.niters= niters 
         # The adjacency matrix (also takes in reference image as argument)
@@ -69,8 +71,26 @@ class CRFasRNN(nn.Module):
     def forward(self,E0,Refs):
         """Assuming E0 and Refs are shape BxLxHxW and BxCxHxW"""
         Q = F.softmax(-E0, dim=1)
-        for i in range(niters):
-            E = E0 + self.W(Mu(Q),Refs)
+        for i in range(self.niters):
+            E = E0 + self.W(self.Mu(Q),Refs)
             Q = F.softmax(-E, dim=1)
         return Q
 
+class ijrgbGuide(nn.Module):
+    def __init__(self,s_ij=.1,s_rgb=.1,trainable=True):
+        super().__init__()
+        self.s_ij = nn.Parameter(torch.tensor(s_ij)) if trainable else s_ij
+        self.s_rgb = nn.Parameter(torch.tensor(s_rgb)) if trainable else s_rgb
+    def forward(self,x):
+        bs,c,h,w = x.shape
+        ij = torch.from_numpy(np.tile(np.mgrid[:h,:w]/np.sqrt(h**2+w**2),(bs,1,1,1))).float().to(x.device)
+        return torch.cat([ij/self.s_ij,x/self.s_rgb],dim=1)
+
+class ijGuide(nn.Module):
+    def __init__(self,s_ij=.1,trainable=True):
+        super().__init__()
+        self.s_ij = nn.Parameter(torch.tensor(s_ij)) if trainable else s_ij
+    def forward(self,x):
+        bs,c,h,w = x.shape
+        ij = torch.from_numpy(np.tile(np.mgrid[:h,:w]/np.sqrt(h**2+w**2),(bs,1,1,1))).float().to(x.device)
+        return ij/self.s_ij
