@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from .gaussian_matrix import BatchedAdjacency
+from .gaussian_matrix import BatchedAdjacency, BatchedGuidedAdjacency
 
 
 def gaussian_weights(f):
@@ -59,14 +59,15 @@ def potts_init(linear_layer):
         tensor.sub_(torch.eye(L)[...,None,None])
     
 class CRFasRNN(nn.Module):
-    def __init__(self,num_classes,niters=5,num_threads=8):
+    def __init__(self,num_classes,niters=5,r=20,eps=1e-5):
         super().__init__()
         #self.Mu = nn.Linear(num_classes,num_classes,bias=False) # The compatibility matrix
         self.Mu = nn.Conv2d(num_classes,num_classes,kernel_size=1,bias=False)
         potts_init(self.Mu)
         self.niters= niters 
         # The adjacency matrix (also takes in reference image as argument)
-        self.W = BatchedAdjacency(num_threads=num_threads) 
+        t_eps = nn.Parameter(torch.tensor(eps))
+        self.W = BatchedGuidedAdjacency(r,t_eps)
     
     def forward(self,E0,Refs):
         """Assuming E0 and Refs are shape BxLxHxW and BxCxHxW"""

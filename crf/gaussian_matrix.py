@@ -64,13 +64,23 @@ class mBoxFilter(nn.Module):
         return union - left - right + intersection
 
 def batchedInv(batchedTensor):
-        if batchedTensor.shape[0] >= 256 * 256 - 1:
-            temp = []
-            for t in torch.split(batchedTensor, 256 * 256 - 1):
-                temp.append(torch.inverse(t))
-            return torch.cat(temp)
-        else:
-            return torch.inverse(batchedTensor)
+    if batchedTensor.shape[0] >= 256 * 256 - 1:
+        temp = []
+        #print(batchedTensor.shape)
+        for t in torch.split(batchedTensor, 256 * 256 - 1):
+            temp.append(torch.inverse(t))
+        return torch.cat(temp)
+    else:
+        return torch.inverse(batchedTensor)
+
+def batchedMM(A,B):
+    if A.shape[0] >= 256 * 256 - 1:
+        temp = []
+        for Ai,Bi in zip(torch.split(A, 256 * 256 - 1),torch.split(B,256*256-1)):
+            temp.append(Ai@Bi)
+        return torch.cat(temp)
+    else:
+        return A@B
 
 class GuidedFilter(nn.Module):
     def __init__(self, r, eps=1e-8):
@@ -111,7 +121,7 @@ class GuidedFilter(nn.Module):
         #A = cov_yx@inverse_mat
         #A = (cov_yx.reshape(-1,c_y,c_x) @ batchedInv(cov_xx.reshape(-1,c_x,c_x) + self.eps*I)).reshape(n,h,w,c_y,c_x)
         cov_xx_inv = batchedInv(cov_xx.reshape(-1,c_x,c_x) + self.eps*I)
-        A = memoryEfficientBMM(cov_yx.reshape(-1,c_y,c_x),cov_xx_inv).reshape(n,h,w,c_y,c_x)
+        A = batchedMM(cov_yx.reshape(-1,c_y,c_x),cov_xx_inv).reshape(n,h,w,c_y,c_x)
         #print(torch.cuda.memory_allocated()) 
         A_vec = A.reshape(n,h,w,c_y*c_x).permute(0,3,1,2)
         # b
@@ -156,7 +166,10 @@ class GuidedAdjacency(GuidedFilter):
         filtered_output = self(img_U,self.guide_img)
         return (filtered_output*.5*(2*self.r+1)**2 - img_U).data.cpu().squeeze().permute(1,2,0).reshape(U.shape)
 
-
+class BatchedGuidedAdjacency(GuidedFilter):
+    def forward(self,src_imgs,guide_imgs):
+        return super().forward(src_imgs,guide_imgs)*.5*(2*self.r+1)**2 - src_imgs
+        
 class LatticeGaussian(nn.Module):
     def __init__(self,ref):
         super().__init__()
