@@ -14,6 +14,7 @@
 #include <sys/time.h>
 #endif
 #define at_float_type at::kFloat 
+//#define printf //
 using namespace std;
 typedef float float_type;
 //typedef at::kDouble at_float_type;
@@ -168,8 +169,11 @@ class HashTablePermutohedral {
 };
 
 void arr_deleter(void* obj){
-  printf("Array object deleted :)");
-  delete [] obj;
+  
+  if (obj != NULL){
+    //delete [] obj;
+    printf("Array object deleted :)");
+  } 
 }
 
 /***************************************************************/

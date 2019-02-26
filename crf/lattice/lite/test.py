@@ -2,11 +2,11 @@ import torch
 #import lattice
 from torch.utils.cpp_extension import load
 lattice = load(name="lattice",sources=["lattice.cpp"])
-ref = torch.rand(1000000,3).float()*1000
-src = torch.rand(1000000,6).float()
+ref = torch.rand(100000,3)
+src = torch.rand(100000,6)
 #out = torch.zeros(1000000,16)
 #print(lattice.testfunc(torch.ones((2,3))))
-src[:,-1] = torch.ones(1000000).float()
+src[:,-1] = torch.ones(100000)
 print(ref)
 print(src)
 print(lattice.filter(src,ref))
