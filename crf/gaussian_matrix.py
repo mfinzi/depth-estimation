@@ -4,6 +4,7 @@ from torch.utils.cpp_extension import load
 import os
 import crf
 from torch.autograd import Function
+import torch.nn.functional as F
 from guided_filter_pytorch.guided_filter import GuidedFilter, BoxFilter
 import time
 import numpy as np
@@ -11,6 +12,64 @@ import concurrent.futures
 
 lattice = load(name="lattice",sources=[os.path.expanduser("~/depth-estimation/crf/lattice/lite/lattice.cpp")])
 latticefilter = lattice.filter
+
+def encode_outer(x,y):
+    """Encodes the outer product of two images of shape bs x c1 x h x w
+       and bs x c2 x h x w into an image of shape bs x (c1*c2) x h x w """
+    xy = x[:,:,None,:,:]*y[:,None,:,:,:]
+    bs,c1,c2,h,w = xy.shape
+    return xy.reshape(bs,c1*c2,h,w)
+
+def decode_outer(xy):
+    """"""
+    pass
+
+def img_mvm(A,x):
+    #print(A.shape)
+    #print(x.permute(0,2,3,1).unsqueeze(-1).shape)
+    return (A @ x.permute(0,2,3,1).unsqueeze(-1)).squeeze(-1).permute(0,3,1,2)
+
+
+# class MemoryEfficientBMM()
+def memoryEfficientBMM(A1,A2):
+    """Assumes input matrices A1, and A2 are of shape b x n x m and b x m x p
+        to produce an output of shape b x n x p, works well when n,m,p << b"""
+    b,n,m = A1.shape
+    b2,m2,p = A2.shape
+    assert b==b2 and m==m2, "incompatible shapes"
+    inner = torch.zeros_like(A1)
+    output = A1.data.new().resize_(b,n,p)
+    
+    for i in range(n):
+        for j in range(p):
+            inner = A1[:,i,:]*A2[:,:,j]
+            inner_sum = inner.sum(-1)
+            output[:,i,j] = inner_sum#torch.einsum('bnm,bmp->bnp',A1,A2)#(A1[:,:,:,None]*A2[:,None,:,:]).sum(2)
+    return output
+
+class mBoxFilter(nn.Module):
+    def __init__(self,r):
+        super().__init__()
+        self.r = r
+    def forward(self,x):
+        assert x.dim()==4, f"Got shape {x.shape}"
+        r = self.r
+        summed = F.pad(x,(r+1,r,r+1,r)).cumsum(dim=2).cumsum(dim=3)
+        intersection = summed[:,:,:-2*r-1,:-2*r-1]
+        union = summed[:,:,2*r+1:,2*r+1:]
+        left = summed[:,:,:-2*r-1,2*r+1:]
+        right = summed[:,:,2*r+1:,:-2*r-1]
+        #print(intersection.shape,union.shape,left.shape,right.shape)
+        return union - left - right + intersection
+
+def batchedInv(batchedTensor):
+        if batchedTensor.shape[0] >= 256 * 256 - 1:
+            temp = []
+            for t in torch.split(batchedTensor, 256 * 256 - 1):
+                temp.append(torch.inverse(t))
+            return torch.cat(temp)
+        else:
+            return torch.inverse(batchedTensor)
 
 class GuidedFilter(nn.Module):
     def __init__(self, r, eps=1e-8):
@@ -21,45 +80,81 @@ class GuidedFilter(nn.Module):
         self.boxfilter = BoxFilter(r)
 
 
-    def forward(self, x, y):
+    def forward(self, y, x):
         n_x, c_x, h_x, w_x = x.size()
         n_y, c_y, h_y, w_y = y.size()
 
         assert n_x == n_y
         assert h_x == h_y and w_x == w_y
+        n,h,w = n_x,h_x,w_x
         assert h_x > 2 * self.r + 1 and w_x > 2 * self.r + 1
 
         # N
-        N = self.boxfilter(Variable(x.data.new().resize_((1, 1, h_x, w_x)).fill_(1.0)))
+        N = self.boxfilter(x.data.new().resize_((1, 1, h_x, w_x)).fill_(1.0))
 
         # mean_x
         mean_x = self.boxfilter(x) / N
         # mean_y
         mean_y = self.boxfilter(y) / N
-        # cov_xy
-        cov_xy = self.boxfilter(x * y) / N - mean_x * mean_y
-        # var_x
-        var_x = self.boxfilter(x * x) / N - mean_x * mean_x
 
+        # cov_yx # shape: {n x h x w x c_y x c_x}
+        cov_yx = (self.boxfilter(encode_outer(y,x)) / N - encode_outer(mean_y,mean_x)).permute(0,2,3,1).reshape(n,h,w,c_y,c_x)
+        # var_x  # shape: {n x h x w x c_x x c_x}
+        cov_xx = (self.boxfilter(encode_outer(x,x)) / N - encode_outer(mean_x,mean_x)).permute(0,2,3,1).reshape(n,h,w,c_x,c_x)
+
+        # I # shape: {c_x x c_x}
+        I = torch.eye(c_x).to(x.device)
         # A
-        A = cov_xy / (var_x + self.eps)
+        #A = torch.einsum('nhwij,nhwjk->nhwik',(cov_yx, torch.inverse(cov_xx + self.eps*I)))
+        #inverse_mat = torch.inverse(cov_xx+self.eps*I)
+        #A = cov_yx@inverse_mat
+        #A = (cov_yx.reshape(-1,c_y,c_x) @ batchedInv(cov_xx.reshape(-1,c_x,c_x) + self.eps*I)).reshape(n,h,w,c_y,c_x)
+        cov_xx_inv = batchedInv(cov_xx.reshape(-1,c_x,c_x) + self.eps*I)
+        A = memoryEfficientBMM(cov_yx.reshape(-1,c_y,c_x),cov_xx_inv).reshape(n,h,w,c_y,c_x)
+        #print(torch.cuda.memory_allocated()) 
+        A_vec = A.reshape(n,h,w,c_y*c_x).permute(0,3,1,2)
         # b
-        b = mean_y - A * mean_x
+        b = mean_y - img_mvm(A,mean_x)
 
         # mean_A; mean_b
-        mean_A = self.boxfilter(A) / N
+        mean_A_vec = self.boxfilter(A_vec) / N
+        mean_A = mean_A_vec.permute(0,2,3,1).reshape(n,h,w,c_y,c_x)
         mean_b = self.boxfilter(b) / N
 
-        return mean_A * x + mean_b
+        return img_mvm(mean_A,x) + mean_b
+
+
+class TaylorFilter(nn.Module):
+    def __init__(self):
+        super().__init__()
+    def forward(self,src,guide_img):
+        exp_img = torch.exp(-(guide_img**2).sum(1))[:,None,:,:]
+        weighted_src = exp_img*src
+        offset = weighted_src.sum(-1).sum(-1)[:,:,None,None]
+        interaction_term = (guide_img[:,:,None,:,:]*weighted_src[:,None,:,:,:]).sum(-1).sum(-1) # Sum over pixels
+        interaction_img = (interaction_term[:,:,:,None,None]*guide_img[:,:,None,:,:]).sum(1) # sum over guide dimensions
+        return exp_img*(offset + 2*interaction_img)
+
+class TaylorAdjacency(TaylorFilter):
+    def __init__(self,guide_img):
+        super().__init__()
+        self.guide_img = torch.from_numpy(guide_img).float().permute(2,0,1)[None,...]
+
+    def __matmul__(self,U):
+        img_U = U.t().reshape((-1,)+self.guide_img.shape[-2:]).float()[None,...]#[None,...]
+        filtered_output = self(img_U,self.guide_img)
+        return (filtered_output - img_U).data.cpu().squeeze().permute(1,2,0).reshape(U.shape)
 
 class GuidedAdjacency(GuidedFilter):
     def __init__(self,guide_img,r,eps):
         super().__init__(r,eps)
-        self.guide_img = torch.from_numpy(guide_img).float().cuda()
+        self.guide_img = guide_img.float().cuda()
 
     def __matmul__(self,U):
-        img_U = U.t().reshape((-1,)+self.guide_img.shape[-2:]).float().cuda()[None,...]
-        return (self(img_U,self.guide_img) - img_U).data.cpu().squeeze().permute(1,2,0).reshape(U.shape)
+        img_U = U.t().reshape((-1,)+self.guide_img.shape[-2:]).float()[None,...].cuda()#[None,...]
+        filtered_output = self(img_U,self.guide_img)
+        return (filtered_output*.5*(2*self.r+1)**2 - img_U).data.cpu().squeeze().permute(1,2,0).reshape(U.shape)
+
 
 class LatticeGaussian(nn.Module):
     def __init__(self,ref):
@@ -90,6 +185,25 @@ class RbfLaplacian(nn.Module):
         else:
             return (self.D*U - LatticeFilter.apply(U,self.ref))
     
+class RbfLaplacianC(LatticeGaussian):
+    def __init__(self,ref,normalize='sym'):
+        """If normalize is true, will apply symmetric normalization
+            returns D - W or I - D^-1/2 W D^-1/2 if normalize is true"""
+        super().__init__(ref)
+        self.shape = self.ref.shape[:1]*2
+        self.normalize = normalize
+        #if self.normalize:
+        self.D = super().__matmul__(torch.ones(self.shape[:1]+(1,)))
+    def __matmul__(self,U):
+        if self.normalize=='sym':
+            WsqrtDU = super().__matmul__(U/self.D.sqrt())
+            return (U - WsqrtDU/self.D.sqrt())
+        if self.normalize=='right':
+            return U - super().__matmul__(U/self.D)
+        else:
+            WU = super().__matmul__(U)
+            return (self.D*U - WU)
+
 
 class BatchedAdjacency(nn.Module):
     def __init__(self,num_threads=8):
