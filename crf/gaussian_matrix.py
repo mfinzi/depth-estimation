@@ -64,19 +64,19 @@ class mBoxFilter(nn.Module):
         return union - left - right + intersection
 
 def batchedInv(batchedTensor):
-    if batchedTensor.shape[0] >= 256 * 256 - 1:
+    if batchedTensor.shape[0] >= 128 * 128 - 1:
         temp = []
         #print(batchedTensor.shape)
-        for t in torch.split(batchedTensor, 256 * 256 - 1):
+        for t in torch.split(batchedTensor, 128 * 128 - 1):
             temp.append(torch.inverse(t))
         return torch.cat(temp)
     else:
         return torch.inverse(batchedTensor)
 
 def batchedMM(A,B):
-    if A.shape[0] >= 256 * 256 - 1:
+    if A.shape[0] >= 128 * 128 - 1:
         temp = []
-        for Ai,Bi in zip(torch.split(A, 256 * 256 - 1),torch.split(B,256*256-1)):
+        for Ai,Bi in zip(torch.split(A, 128 * 128 - 1),torch.split(B,128*128-1)):
             temp.append(Ai@Bi)
         return torch.cat(temp)
     else:
