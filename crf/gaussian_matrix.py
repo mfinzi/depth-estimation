@@ -82,14 +82,77 @@ def batchedMM(A,B):
     else:
         return A@B
 
+def box_filter(array,r,dim):
+    m = len(array.shape)
+    padding = ((0,0,)*dim + (r,r,)+(0,0,)*(m-dim-1))
+    padded_arr = F.pad(array,padding[::-1]) #zero padding
+    # try:
+    #     padded_arr = F.pad(array,padding[::-1],mode='replicate') #bug with replicate padding on nd
+    # except (AssertionError,NotImplementedError):
+    #     padded_arr = F.pad(array[None,None],padding[::-1],mode='replicate')[0,0]
+    cumsum = padded_arr.cumsum(dim=dim)
+    
+    upper_slice = (slice(None),)*dim + (slice(2*r,None,None),)+(slice(None),)*(m-dim-1)
+    lower_slice = (slice(None),)*dim + (slice(None,-2*r,None),)+(slice(None),)*(m-dim-1)
+    h = array.shape[dim]
+
+    i = np.arange(h)
+    reshape_slice = (None,)*dim + (slice(None),)+(None,)*(m-dim-1)
+    #print(np.minimum(i,r) + np.minimum(h-i-1,r)+1)
+    counts = torch.from_numpy(np.minimum(i,r) + np.minimum(h-i-1,r)+1)[reshape_slice].type(array.dtype).to(array.device)
+    #print(counts)
+    return (cumsum[upper_slice] - cumsum[lower_slice])/counts
+
+def gaussian_blur(array,sigma,dim):
+    return GaussianBlur.apply(array,sigma,dim)
+
+class GaussianBlur(Function):
+    @staticmethod
+    def forward(ctx,array, sigma, dim):
+        ctx.save_for_backward(array,sigma)
+        ctx.dim=dim
+        n_iters = 3 # Number of convolve operations
+        r= int(np.floor(np.sqrt(12*sigma**2/n_iters+1))//2) # Box width
+        for i in range(n_iters):
+            array = box_filter(array,r,dim)
+        return array
+
+    @staticmethod
+    def backward(ctx,grad_output):
+        with torch.no_grad():
+            array,sigma = ctx.saved_tensors
+            v = array
+            dim = ctx.dim
+            g = grad_output
+            grad_v = grad_sigma = None
+            h = v.shape[dim]
+            # shape 1,1,1,h,1,1,1
+            f = (torch.arange(h)/sigma).reshape((1,)*dim+(h,)+(1,)*(len(v.shape)-dim-1)).type(array.dtype).to(array.device)
+            if ctx.needs_input_grad[1]:
+                gf = g*f
+                vf = v*f
+                inner_terms = torch.stack([g,-gf,v,-vf],dim=-1)
+                filtered_inner = GaussianBlur.apply(inner_terms,sigma,dim)#ctx.W@all_#torch.randn_like(all_)#
+                outer_terms = torch.stack([vf,v,gf,g],dim=-1)
+                grad_f = -(outer_terms*filtered_inner).sum(-1)
+                grad_v = filtered_inner[...,0]
+                grad_sigma = -1*(grad_f*f).sum()/sigma -(grad_v*v).sum()/sigma
+            elif ctx.needs_input_grad[0]:
+                grad_v = GaussianBlur.apply(g,sigma,dim)
+        return grad_v, grad_sigma, None # no gradient to dim
+
+
 class GuidedFilter(nn.Module):
     def __init__(self, r, eps=1e-8):
         super(GuidedFilter, self).__init__()
 
         self.r = r
-        self.eps = eps
+        self.omega = nn.Parameter(torch.log(torch.exp(torch.tensor(eps))-1))
+        self.splus = nn.Softplus()
         self.boxfilter = BoxFilter(r)
 
+    def eps(self):
+        return self.splus(self.omega)
 
     def forward(self, y, x):
         n_x, c_x, h_x, w_x = x.size()
@@ -120,7 +183,7 @@ class GuidedFilter(nn.Module):
         #inverse_mat = torch.inverse(cov_xx+self.eps*I)
         #A = cov_yx@inverse_mat
         #A = (cov_yx.reshape(-1,c_y,c_x) @ batchedInv(cov_xx.reshape(-1,c_x,c_x) + self.eps*I)).reshape(n,h,w,c_y,c_x)
-        cov_xx_inv = batchedInv(cov_xx.reshape(-1,c_x,c_x) + self.eps*I)
+        cov_xx_inv = batchedInv(cov_xx.reshape(-1,c_x,c_x) + self.eps()*I)
         A = batchedMM(cov_yx.reshape(-1,c_y,c_x),cov_xx_inv).reshape(n,h,w,c_y,c_x)
         #print(torch.cuda.memory_allocated()) 
         A_vec = A.reshape(n,h,w,c_y*c_x).permute(0,3,1,2)
