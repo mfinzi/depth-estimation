@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from .gaussian_matrix import BatchedAdjacency, BatchedGuidedAdjacency
+from crf.gaussian_matrix import BatchedAdjacency, BatchedGuidedAdjacency
 
 
 def gaussian_weights(f):
@@ -32,6 +32,9 @@ def lazy_W(f):
 def charbonneir(a,b,gamma=.1):
     return torch.sqrt(gamma**2 + (a-b)**2) - gamma
 
+def charbonneir2(a,b,gamma=3):
+    return torch.sqrt(1 + ((a-b)/gamma)**2) - 1
+
 def compatibility_matrix(compat,labels):
     return compat(labels[:,None],labels[None,:])
 
@@ -49,33 +52,51 @@ def mean_field_infer(E_0,W,Mu,niters=10):
         Q = F.softmax(-E, dim=1)
     return Q
 
-def potts_init(linear_layer):
-    tensor = linear_layer.weight
+def potts(num_classes):
+    layer = nn.Conv2d(num_classes,num_classes,kernel_size=1,bias=False)
+    tensor = layer.weight
     L,LL,a,b = tensor.shape
     assert L == LL #(square matrix)
     assert a==b==1
     with torch.no_grad():
         tensor.fill_(1)
         tensor.sub_(torch.eye(L)[...,None,None])
-    
-class CRFasRNN(nn.Module):
-    def __init__(self,num_classes,niters=5,r=20,eps=1e-5):
+    return layer
+
+class charb(nn.Module):
+    def __init__(self,gamma):
         super().__init__()
-        #self.Mu = nn.Linear(num_classes,num_classes,bias=False) # The compatibility matrix
-        self.Mu = nn.Conv2d(num_classes,num_classes,kernel_size=1,bias=False)
-        potts_init(self.Mu)
+        self.gamma = nn.Parameter(torch.tensor(gamma))
+        self.s = nn.Parameter(torch.tensor(0.))
+    def forward(self,x):
+        L = x.shape[1]
+        labels = torch.arange(L).float().cuda()
+        Mu = charbonneir(labels[None,:],labels[:,None],self.gamma*L)
+        return F.conv2d(x,Mu[...,None,None])*torch.exp(self.s)
+
+class CRFasRNN(nn.Module):
+    def __init__(self,mu_init,niters=5,r=20,eps=1e-5,notrain_mu=False,gaussian=False,gchannels=1):
+        super().__init__()
+        self.Mu = mu_init
+        if notrain_mu:
+            for param in self.Mu.parameters(): param.requires_grad=False
         self.niters= niters 
         # The adjacency matrix (also takes in reference image as argument)
-        t_eps = nn.Parameter(torch.tensor(eps))
-        self.W = BatchedGuidedAdjacency(r,t_eps)
+        # softplus parametrization of the epsilon parameter
+        #self.gamma = nn.Parameter(torch.tensor(1.))
+        self.W = BatchedGuidedAdjacency(gchannels,r,eps,gaussian=gaussian)
     
-    def forward(self,E0,Refs):
+    def forward(self,refs,logits,confidence=None):
         """Assuming E0 and Refs are shape BxLxHxW and BxCxHxW"""
+        if confidence is None:
+            confidence = 1
+        E0 = -logits*confidence
         Q = F.softmax(-E0, dim=1)
         for i in range(self.niters):
-            E = E0 + self.W(self.Mu(Q),Refs)
+            E = E0 + self.W(self.Mu(Q),refs)
             Q = F.softmax(-E, dim=1)
-        return Q
+        out_logits = -E
+        return out_logits
 
 class ijrgbGuide(nn.Module):
     def __init__(self,s_ij=.1,s_rgb=.1,trainable=True):

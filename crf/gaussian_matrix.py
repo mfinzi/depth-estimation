@@ -10,6 +10,7 @@ import time
 import numpy as np
 import concurrent.futures
 import torch.multiprocessing as mp
+import math
 #import multiprocessing as mp
 lattice = load(name="lattice",sources=[os.path.expanduser("~/depth-estimation/crf/lattice/lite/lattice.cpp")])
 latticefilter = lattice.filter
@@ -108,18 +109,22 @@ def gaussian_blur(array,sigma,dim):
 
 class GaussianBlur(Function):
     @staticmethod
-    def forward(ctx,array, sigma, dim):
-        ctx.save_for_backward(array,sigma)
-        ctx.dim=dim
-        n_iters = 3 # Number of convolve operations
-        r= int(np.floor(np.sqrt(12*sigma**2/n_iters+1))//2) # Box width
-        for i in range(n_iters):
-            array = box_filter(array,r,dim)
-        return array
+    def forward(ctx,array, sigma, dim,niters=3):
+        #torch.cuda.empty_cache()
+        with torch.no_grad():
+            if ctx.needs_input_grad[0] or ctx.needs_input_grad[1]:
+                ctx.save_for_backward(array,sigma)
+                ctx.dim=dim
+            r= int(np.floor(np.sqrt(12*sigma.cpu()**2/niters+1))//2) # Box width
+            for i in range(niters):
+                array = box_filter(array,r,dim)
+            return array
 
     @staticmethod
     def backward(ctx,grad_output):
         with torch.no_grad():
+            s = []
+            s.append(time.time())
             array,sigma = ctx.saved_tensors
             v = array
             dim = ctx.dim
@@ -128,40 +133,62 @@ class GaussianBlur(Function):
             h = v.shape[dim]
             # shape 1,1,1,h,1,1,1
             f = (torch.arange(h)/sigma).reshape((1,)*dim+(h,)+(1,)*(len(v.shape)-dim-1)).type(array.dtype).to(array.device)
+            s.append(time.time())
             if ctx.needs_input_grad[1]:
                 gf = g*f
                 vf = v*f
+                s.append(time.time())
                 inner_terms = torch.stack([g,-gf,v,-vf],dim=-1)
+                s.append(time.time())
+                #print(inner_terms.shape)
                 filtered_inner = GaussianBlur.apply(inner_terms,sigma,dim)#ctx.W@all_#torch.randn_like(all_)#
                 outer_terms = torch.stack([vf,v,gf,g],dim=-1)
+                s.append(time.time())
                 grad_f = -(outer_terms*filtered_inner).sum(-1)
                 grad_v = filtered_inner[...,0]
+                s.append(time.time())
                 grad_sigma = -1*(grad_f*f).sum()/sigma -(grad_v*v).sum()/sigma
+                s.append(time.time())
+                s = np.array(s)
+                #print(f"{s[1:]-s[:-1]}")
             elif ctx.needs_input_grad[0]:
                 grad_v = GaussianBlur.apply(g,sigma,dim)
         return grad_v, grad_sigma, None # no gradient to dim
 
 
+
+
 class GuidedFilter(nn.Module):
-    def __init__(self, r, eps=1e-8):
+    def __init__(self,channels=1, r=20, eps=1e-8,gaussian=False):
         super(GuidedFilter, self).__init__()
 
-        self.r = r
-        self.omega = nn.Parameter(torch.log(torch.exp(torch.tensor(eps))-1))
+        
+        self.omega = nn.Parameter(torch.log(torch.exp(torch.tensor(eps))-1).expand(channels))
         self.splus = nn.Softplus()
-        self.boxfilter = BoxFilter(r)
-
+        if gaussian:
+            self.omega2 = nn.Parameter(torch.log(torch.tensor(r).float()))#torch.log(torch.tensor(r).float())#
+            self.boxfilter = lambda arr: gaussian_blur(gaussian_blur(arr,self.r(),dim=2),self.r(),dim=3)
+        else:
+            self._r = r
+            self.boxfilter = BoxFilter(r)
+        self.gaussian = gaussian
+    #@property
+    def r(self):
+        if self.gaussian:
+            return torch.exp(self.omega2)
+        else:
+            return self._r
+    @property
     def eps(self):
         return self.splus(self.omega)
-
-    def forward(self, y, x):
+    def get_coeffs(self,y,x):
         n_x, c_x, h_x, w_x = x.size()
         n_y, c_y, h_y, w_y = y.size()
 
         assert n_x == n_y
         assert h_x == h_y and w_x == w_y
         n,h,w = n_x,h_x,w_x
-        assert h_x > 2 * self.r + 1 and w_x > 2 * self.r + 1
+        assert h_x > 2 * self.r() + 1 and w_x > 2 * self.r() + 1
 
         # N
         N = self.boxfilter(x.data.new().resize_((1, 1, h_x, w_x)).fill_(1.0))
@@ -174,7 +201,7 @@ class GuidedFilter(nn.Module):
         # cov_yx # shape: {n x h x w x c_y x c_x}
         cov_yx = (self.boxfilter(encode_outer(y,x)) / N - encode_outer(mean_y,mean_x)).permute(0,2,3,1).reshape(n,h,w,c_y,c_x)
         # var_x  # shape: {n x h x w x c_x x c_x}
-        cov_xx = (self.boxfilter(encode_outer(x,x)) / N - encode_outer(mean_x,mean_x)).permute(0,2,3,1).reshape(n,h,w,c_x,c_x)
+        #cov_xx = (self.boxfilter(encode_outer(x,x)) / N - encode_outer(mean_x,mean_x)).permute(0,2,3,1).reshape(n,h,w,c_x,c_x)
 
         # I # shape: {c_x x c_x}
         I = torch.eye(c_x).to(x.device)
@@ -183,8 +210,12 @@ class GuidedFilter(nn.Module):
         #inverse_mat = torch.inverse(cov_xx+self.eps*I)
         #A = cov_yx@inverse_mat
         #A = (cov_yx.reshape(-1,c_y,c_x) @ batchedInv(cov_xx.reshape(-1,c_x,c_x) + self.eps*I)).reshape(n,h,w,c_y,c_x)
-        cov_xx_inv = batchedInv(cov_xx.reshape(-1,c_x,c_x) + self.eps()*I)
-        A = batchedMM(cov_yx.reshape(-1,c_y,c_x),cov_xx_inv).reshape(n,h,w,c_y,c_x)
+
+        #->#cov_xx_inv = batchedInv(cov_xx.reshape(-1,c_x,c_x) + self.eps*I)
+        cov_xx_lite = (self.boxfilter(x*x) / N -mean_x*mean_x).permute(0,2,3,1).reshape(-1,c_x)
+        A_lite = cov_yx.reshape(-1,c_y,c_x)/(cov_xx_lite[...,None,:] + self.eps)
+        A = A_lite.reshape(n,h,w,c_y,c_x)
+        #->#A = batchedMM(cov_yx.reshape(-1,c_y,c_x),cov_xx_inv).reshape(n,h,w,c_y,c_x)
         #print(torch.cuda.memory_allocated()) 
         A_vec = A.reshape(n,h,w,c_y*c_x).permute(0,3,1,2)
         # b
@@ -194,45 +225,70 @@ class GuidedFilter(nn.Module):
         mean_A_vec = self.boxfilter(A_vec) / N
         mean_A = mean_A_vec.permute(0,2,3,1).reshape(n,h,w,c_y,c_x)
         mean_b = self.boxfilter(b) / N
+        return mean_A,mean_b
 
+    def forward(self, y, x):
+        mean_A, mean_b = self.get_coeffs(y,x)
         return img_mvm(mean_A,x) + mean_b
 
+class FastGuidedFilter(GuidedFilter):
+    def __init__(self,*args,subsample_ratio=2,mode='nearest',**kwargs):
+        super().__init__(*args,**kwargs)
+        self.subsample_ratio=subsample_ratio
+        self.boxfilter = BoxFilter(self._r//subsample_ratio)
+        self.mode = mode
 
-class TaylorFilter(nn.Module):
-    def __init__(self):
-        super().__init__()
-    def forward(self,src,guide_img):
-        exp_img = torch.exp(-(guide_img**2).sum(1))[:,None,:,:]
-        weighted_src = exp_img*src
-        offset = weighted_src.sum(-1).sum(-1)[:,:,None,None]
-        interaction_term = (guide_img[:,:,None,:,:]*weighted_src[:,None,:,:,:]).sum(-1).sum(-1) # Sum over pixels
-        interaction_img = (interaction_term[:,:,:,None,None]*guide_img[:,:,None,:,:]).sum(1) # sum over guide dimensions
-        return exp_img*(offset + 2*interaction_img)
+    def forward(self,y,x):
+        s = self.subsample_ratio
+        n, c_x, h, w = x.size()
+        n, c_y, h, w = y.size()
+        y_lowres = F.interpolate(y,size=(h//s,w//s),mode=self.mode)
+        x_lowres = F.interpolate(x,size=(h//s,w//s),mode=self.mode)
+        mean_A_lowres,mean_b_lowres = self.get_coeffs(y_lowres,x_lowres)
+        mean_A_lowres_vec = mean_A_lowres.reshape(n,h//s,w//s,c_y*c_x).permute(0,3,1,2)
+        mean_A_ = F.interpolate(mean_A_lowres_vec,size=(h,w),mode=self.mode).permute(0,2,3,1)
+        #print(f'A {mean_A_.shape}, x {x.shape}, y {y.shape}')
+        mean_A = mean_A_.reshape(n,h,w,c_y,c_x)
+        mean_b = F.interpolate(mean_b_lowres,size=(h,w),mode=self.mode)
+        return img_mvm(mean_A,x) + mean_b
+# class TaylorFilter(nn.Module):
+#     def __init__(self):
+#         super().__init__()
+#     def forward(self,src,guide_img):
+#         exp_img = torch.exp(-(guide_img**2).sum(1))[:,None,:,:]
+#         weighted_src = exp_img*src
+#         offset = weighted_src.sum(-1).sum(-1)[:,:,None,None]
+#         interaction_term = (guide_img[:,:,None,:,:]*weighted_src[:,None,:,:,:]).sum(-1).sum(-1) # Sum over pixels
+#         interaction_img = (interaction_term[:,:,:,None,None]*guide_img[:,:,None,:,:]).sum(1) # sum over guide dimensions
+#         return exp_img*(offset + 2*interaction_img)
 
-class TaylorAdjacency(TaylorFilter):
-    def __init__(self,guide_img):
-        super().__init__()
-        self.guide_img = torch.from_numpy(guide_img).float().permute(2,0,1)[None,...]
+# class TaylorAdjacency(TaylorFilter):
+#     def __init__(self,guide_img):
+#         super().__init__()
+#         self.guide_img = torch.from_numpy(guide_img).float().permute(2,0,1)[None,...]
 
-    def __matmul__(self,U):
-        img_U = U.t().reshape((-1,)+self.guide_img.shape[-2:]).float()[None,...]#[None,...]
-        filtered_output = self(img_U,self.guide_img)
-        return (filtered_output - img_U).data.cpu().squeeze().permute(1,2,0).reshape(U.shape)
+#     def __matmul__(self,U):
+#         img_U = U.t().reshape((-1,)+self.guide_img.shape[-2:]).float()[None,...]#[None,...]
+#         filtered_output = self(img_U,self.guide_img)
+#         return (filtered_output - img_U).data.cpu().squeeze().permute(1,2,0).reshape(U.shape)
 
-class GuidedAdjacency(GuidedFilter):
-    def __init__(self,guide_img,r,eps):
-        super().__init__(r,eps)
-        self.guide_img = guide_img.float().cuda()
+# class GuidedAdjacency(GuidedFilter):
+#     def __init__(self,guide_img,r,eps):
+#         super().__init__(r,eps)
+#         self.guide_img = guide_img.float().cuda()
 
-    def __matmul__(self,U):
-        img_U = U.t().reshape((-1,)+self.guide_img.shape[-2:]).float()[None,...].cuda()#[None,...]
-        filtered_output = self(img_U,self.guide_img)
-        return (filtered_output*.5*(2*self.r+1)**2 - img_U).data.cpu().squeeze().permute(1,2,0).reshape(U.shape)
+#     def __matmul__(self,U):
+#         img_U = U.t().reshape((-1,)+self.guide_img.shape[-2:]).float()[None,...].cuda()#[None,...]
+#         filtered_output = self(img_U,self.guide_img)
+#         return (filtered_output*.5*(2*self.r+1)**2 - img_U).data.cpu().squeeze().permute(1,2,0).reshape(U.shape)
 
-class BatchedGuidedAdjacency(GuidedFilter):
-    def forward(self,src_imgs,guide_imgs):
-        return super().forward(src_imgs,guide_imgs)*.5*(2*self.r+1)**2 - src_imgs
-        
+class BatchedGuidedAdjacency(FastGuidedFilter):
+    def forward(self,src_imgs,guide_imgs):#*.5*(2*self.r()+1)**2#(.5*self.r()*math.sqrt(2*math.pi))
+        return super().forward(src_imgs,guide_imgs)*.5*(2*self.r()+1)**2 - src_imgs
+
+#class MattingLaplacian(GuidedFilter):
+
+
 class LatticeGaussian(nn.Module):
     def __init__(self,ref):
         super().__init__()

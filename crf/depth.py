@@ -37,9 +37,9 @@ def disparity_badness(img1,img2,window_size=9,criterion=AD):
     """Computes the the energy for each disparity in 0,1,...,w//4
         using the sweep over patches with criterion"""
     ws = window_size
-    max_disp = img1.shape[1]//8
-    nimg1 = normalized(img1,(ws,ws))
-    nimg2 = normalized(img2,(ws,ws))
+    max_disp = (img1.shape[1]//6)#int(np.round((img1.shape[1]//6)/20)*20) #(snap to nearest 20 for convenience)
+    nimg1 = img1#normalized(img1,(ws,ws))#img1#normalized(img1,(ws,ws))
+    nimg2 = img2#normalized(img2,(ws,ws))#img2#normalized(img2,(ws,ws))
 
     h,w,c = nimg1.shape
     padded_im2 = np.pad(nimg2,((0,0),(max_disp,0),(0,0)), mode='constant')
