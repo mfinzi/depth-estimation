@@ -3,6 +3,9 @@ import numpy as np
 import torchvision.models as models
 import torch.nn as nn
 from scipy.ndimage import zoom
+import torch.nn.functional as F
+
+
 class Vgg16features(torch.nn.Module):
     def __init__(self):
         super().__init__()
@@ -34,13 +37,20 @@ class Vgg16features(torch.nn.Module):
         img_np = img_torch.cpu().data.numpy()[0].transpose((1,2,0))
         hn,wn,_ = img_np.shape
         zoom_factor = h/hn,w/wn,1
-        return zoom(img_np,zoom_factor,order=0)
+        return zoom(img_np,zoom_factor,order=2)
 
     def get_features(self,x,k=3):
         xpt = self.preprocess(x)
         feature_list = self(xpt)
         np_features = [self.rescale_reshape(feature,x.shape) for feature in feature_list[:k]]
         return np_features
+
+    def get_torch_features(self,x,k=0):
+        x = nn.functional.interpolate(x,size=(224,224),mode='bilinear',align_corners=True)
+        normalized_x = (x-x.mean(dim=1,keepdim=True))/(x.std(dim=1,keepdim=True)+1e-8)
+        features = self(normalized_x)[k]
+        #resized = F.upsample(features,x.size()[2:],mode='bilinear')
+        return features.data#resized
 
     def get_all_features(self,x):
         xpt = self.preprocess(x)

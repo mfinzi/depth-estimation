@@ -12,6 +12,8 @@ import scipy as sp
 import matplotlib.pyplot as plt
 import pickle
 from crf.features import Vgg16features
+import skimage
+import scipy.ndimage as simg
 
 def vis(img,unary_depth,target_depth,vmax=255):
     plt.rcParams.update({'font.size': 22})
@@ -28,6 +30,10 @@ def replace_inf(x,val=-1):
     x[~np.isfinite(x)]=val
     return x
 
+def replace_0(x,val=-1):
+    x[x==0] = val
+    return x
+
 class MBStereo14(Dataset,metaclass=Named):
     def __init__(self,root='~/datasets/mbstereo2014/',downsize=2):
         self.data_path = os.path.expanduser(root)
@@ -35,7 +41,7 @@ class MBStereo14(Dataset,metaclass=Named):
         right_img_pths = glob.glob(self.data_path+'*/im1.png')
         left_disp_pths = glob.glob(self.data_path+'*/disp0.pfm')
         self.downsize=downsize
-        ds = lambda img: sp.ndimage.zoom(img,(1/downsize,1/downsize,1),order=2)
+        ds = lambda img: simg.gaussian_filter(simg.zoom(img,(1/downsize,1/downsize,1),order=2),1.4)
         self.left_imgs = [ds(read_image(pth)) for pth in left_img_pths]
         self.right_imgs = [ds(read_image(pth)) for pth in right_img_pths]
         self.left_target = [ds(replace_inf(read_pfm(pth))[...,None])/downsize for pth in left_disp_pths]
@@ -45,7 +51,7 @@ class MBStereo14(Dataset,metaclass=Named):
     def __len__(self):
         return len(self.left_imgs)
 
-def planar_sweep_algorithm(ws=9,criterion=crf.depth.AD):
+def planar_sweep_algorithm(ws=1,criterion=crf.depth.AD):
     def get_disp(img_left,img_right):
         return -1*crf.depth.disparity_badness(img_left,img_right,ws,criterion=criterion)
     return get_disp
@@ -92,3 +98,55 @@ def softmax(x,axis=0):
     """Compute softmax values for each sets of scores in x."""
     e_x = np.exp(x)# - np.max(x,axis=axis,keepdims=True))
     return e_x / e_x.sum(axis=axis,keepdims=True)
+
+class StereoUpsampling05(Dataset,metaclass=Named):
+    def __init__(self,root='~/datasets/mbstereo2005/',downsize=16,val=False,use_vgg=True):
+        self.data_path = os.path.expanduser(root)
+        self.downsize=downsize
+        if val: self.img_names = ['Art','Books','Moebius']
+        else: self.img_names = ['Laundry','Dolls','Reindeer']
+
+        self.imgs_highres = [read_image(self.data_path+img_name+'/view1.png') for img_name in self.img_names]
+        self.disps_highres = [read_image(self.data_path+img_name+'/disp1.png')[...,0][...,None] for img_name in self.img_names]
+
+        #downsample =  lambda img: simg.gaussian_filter(simg.zoom(img,(1/downsize,1/downsize,1),order=2),1)
+        downsample = lambda img: skimage.transform.pyramid_reduce(img,downscale=downsize,multichannel=True)
+        self.disps_lowres = [downsample(disp) for disp in self.disps_highres]
+
+        self.use_vgg = use_vgg
+        if use_vgg:
+            self.vgg_features = self.get_vgg_features(downsize,val)
+
+    @staticmethod
+    def to_tensor(img_numpy):
+        return torch.from_numpy(img_numpy).float().permute((2,0,1)).cuda()
+    def __getitem__(self,index):
+        x = (self.to_tensor(self.disps_lowres[index]),self.to_tensor(self.imgs_highres[index]))
+        if self.use_vgg:
+            x += (self.vgg_features[index],)
+        y = self.to_tensor(self.disps_highres[index])
+        return x,y
+    def __len__(self):
+        return len(self.imgs_highres)
+
+    def get_vgg_features(self,downsize,val):
+        cache_file = self.data_path+'cachelist.pkl'
+        if not os.path.exists(cache_file):
+            cached_args_table = dict()
+            torch.save(cached_args_table,cache_file)
+        cached_args_table = torch.load(cache_file)
+        if False:#(downsize,val) in cached_args_table:
+            print("Using cached dataset")
+            with open(cached_args_table[(downsize,val)],'rb') as f:
+                vgg_features = pickle.load(f)
+        else:
+            print("No cached logits found, computing dataset")
+            VGG = Vgg16features().cuda().eval()
+            vgg_features = [VGG.get_torch_features(self.to_tensor(img)[None],k=0)[0] for img in self.imgs_highres]
+           #print(len(self.vgg_features))
+            fname = os.path.expanduser(self.data_path)+'cached_{}.pkl'.format(downsize)
+            with open(fname,'wb') as f:
+                pickle.dump(vgg_features,f)
+            cached_args_table[(downsize,val)] = fname
+            torch.save(cached_args_table,cache_file)
+        return vgg_features

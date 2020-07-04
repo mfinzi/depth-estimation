@@ -68,11 +68,15 @@ class charb(nn.Module):
         super().__init__()
         self.gamma = nn.Parameter(torch.tensor(gamma))
         self.s = nn.Parameter(torch.tensor(0.))
-    def forward(self,x):
+    def forward(self,x,labels=None):
         L = x.shape[1]
-        labels = torch.arange(L).float().cuda()
-        Mu = charbonneir(labels[None,:],labels[:,None],self.gamma*L)
+        if labels is None: labels = torch.arange(L).float().cuda()
+        Mu = charbonneir(labels[None,:],labels[:,None],self.gamma)
         return F.conv2d(x,Mu[...,None,None])*torch.exp(self.s)
+    def get_energies_from_scalar(self,x,labels):
+        #print(self.gamma,self.s)
+        energies = charbonneir(labels,x,self.gamma*labels.max())*torch.exp(self.s)
+        return energies
 
 class CRFasRNN(nn.Module):
     def __init__(self,mu_init,niters=5,r=20,eps=1e-5,notrain_mu=False,gaussian=False,gchannels=1):
@@ -85,15 +89,16 @@ class CRFasRNN(nn.Module):
         # softplus parametrization of the epsilon parameter
         #self.gamma = nn.Parameter(torch.tensor(1.))
         self.W = BatchedGuidedAdjacency(gchannels,r,eps,gaussian=gaussian)
-    
-    def forward(self,refs,logits,confidence=None):
+
+    def forward(self,refs,logits,confidence=None,labels=None):
         """Assuming E0 and Refs are shape BxLxHxW and BxCxHxW"""
         if confidence is None:
             confidence = 1
         E0 = -logits*confidence
+        Mu = (lambda q: self.Mu(q)) if labels is None else (lambda q: self.Mu(q,labels))
         Q = F.softmax(-E0, dim=1)
         for i in range(self.niters):
-            E = E0 + self.W(self.Mu(Q),refs)
+            E = E0 + self.W(Mu(Q),refs)
             Q = F.softmax(-E, dim=1)
         out_logits = -E
         return out_logits
